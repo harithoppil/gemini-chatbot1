@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useEnterSubmit } from '@/lib/hooks/use-enter-submit'
 import { nanoid } from 'nanoid'
-import { toast } from 'sonner'
+import { useRouter } from 'next/navigation'
 
 export function PromptForm({
   input,
@@ -25,9 +25,10 @@ export function PromptForm({
   input: string
   setInput: (value: string) => void
 }) {
+  const router = useRouter()
   const { formRef, onKeyDown } = useEnterSubmit()
   const inputRef = React.useRef<HTMLTextAreaElement>(null)
-  const { submitUserMessage, describeImage } = useActions()
+  const { submitUserMessage } = useActions()
   const [_, setMessages] = useUIState<typeof AI>()
 
   React.useEffect(() => {
@@ -35,8 +36,6 @@ export function PromptForm({
       inputRef.current.focus()
     }
   }, [])
-
-  const fileRef = React.useRef<HTMLInputElement>(null)
 
   return (
     <form
@@ -62,85 +61,34 @@ export function PromptForm({
           }
         ])
 
-        try {
-          // Submit and get response message
-          const responseMessage = await submitUserMessage(value)
-          setMessages(currentMessages => [...currentMessages, responseMessage])
-        } catch {
-          toast(
-            <div className="text-red-600">
-              You have reached your message limit! Please try again later, or{' '}
-              <a
-                className="underline"
-                target="_blank"
-                rel="noopener noreferrer"
-                href="https://vercel.com/templates/next.js/gemini-ai-chatbot"
-              >
-                deploy your own version
-              </a>
-              .
-            </div>
-          )
-        }
+        // Submit and get response message
+        const responseMessage = await submitUserMessage(value)
+        setMessages(currentMessages => [...currentMessages, responseMessage])
       }}
     >
-      <input
-        type="file"
-        className="hidden"
-        id="file"
-        ref={fileRef}
-        onChange={async event => {
-          if (!event.target.files) {
-            toast.error('No file selected')
-            return
-          }
-
-          const file = event.target.files[0]
-
-          if (file.type.startsWith('video/')) {
-            const responseMessage = await describeImage('')
-            setMessages(currentMessages => [
-              ...currentMessages,
-              responseMessage
-            ])
-          } else {
-            const reader = new FileReader()
-            reader.readAsDataURL(file)
-
-            reader.onloadend = async () => {
-              const base64String = reader.result
-              const responseMessage = await describeImage(base64String)
-              setMessages(currentMessages => [
-                ...currentMessages,
-                responseMessage
-              ])
-            }
-          }
-        }}
-      />
-      <div className="relative flex max-h-60 w-full grow flex-col overflow-hidden bg-zinc-100 px-12 sm:rounded-full sm:px-12">
-        {/* <Tooltip>
-          <TooltipTrigger asChild> */}
-        <Button
-          variant="outline"
-          size="icon"
-          className="absolute left-4 top-[14px] size-8 rounded-full bg-background p-0 sm:left-4"
-          onClick={() => {
-            fileRef.current?.click()
-          }}
-        >
-          <IconPlus />
-          <span className="sr-only">New Chat</span>
-        </Button>
-        {/* </TooltipTrigger>
-          <TooltipContent>Add Attachments</TooltipContent>
-        </Tooltip> */}
+      <div className="relative flex max-h-60 w-full grow flex-col overflow-hidden bg-background px-8 sm:rounded-md sm:border sm:px-12">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="absolute left-0 top-[14px] size-8 rounded-full bg-background p-0 sm:left-4"
+              onClick={() => {
+                router.push('/new')
+              }}
+            >
+              <IconPlus />
+              <span className="sr-only">New Chat</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>New Chat</TooltipContent>
+        </Tooltip>
         <Textarea
           ref={inputRef}
           tabIndex={0}
           onKeyDown={onKeyDown}
           placeholder="Send a message."
-          className="min-h-[60px] w-full bg-transparent placeholder:text-zinc-900 resize-none px-4 py-[1.3rem] focus-within:outline-none sm:text-sm"
+          className="min-h-[60px] w-full resize-none bg-transparent px-4 py-[1.3rem] focus-within:outline-none sm:text-sm"
           autoFocus
           spellCheck={false}
           autoComplete="off"
@@ -150,15 +98,10 @@ export function PromptForm({
           value={input}
           onChange={e => setInput(e.target.value)}
         />
-        <div className="absolute right-4 top-[13px] sm:right-4">
+        <div className="absolute right-0 top-[13px] sm:right-4">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                type="submit"
-                size="icon"
-                disabled={input === ''}
-                className="bg-transparent shadow-none text-zinc-950 rounded-full hover:bg-zinc-200"
-              >
+              <Button type="submit" size="icon" disabled={input === ''}>
                 <IconArrowElbow />
                 <span className="sr-only">Send message</span>
               </Button>
