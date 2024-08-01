@@ -1,7 +1,3 @@
-// @ts-nocheck
-
-/* eslint-disable jsx-a11y/alt-text */
-/* eslint-disable @next/next/no-img-element */
 import 'server-only'
 
 import {
@@ -9,132 +5,111 @@ import {
   createStreamableUI,
   getMutableAIState,
   getAIState,
+  streamUI,
   createStreamableValue
 } from 'ai/rsc'
+import { openai } from '@ai-sdk/openai'
 
-import { BotCard, BotMessage } from '@/components/stocks'
+import {
+  spinner,
+  BotCard,
+  BotMessage,
+  SystemMessage,
+  Stock,
+  Purchase
+} from '@/components/stocks'
 
-import { nanoid, sleep } from '@/lib/utils'
+import { z } from 'zod'
+import { EventsSkeleton } from '@/components/stocks/events-skeleton'
+import { Events } from '@/components/stocks/events'
+import { StocksSkeleton } from '@/components/stocks/stocks-skeleton'
+import { Stocks } from '@/components/stocks/stocks'
+import { StockSkeleton } from '@/components/stocks/stock-skeleton'
+import {
+  formatNumber,
+  runAsyncFnWithoutBlocking,
+  sleep,
+  nanoid
+} from '@/lib/utils'
 import { saveChat } from '@/app/actions'
 import { SpinnerMessage, UserMessage } from '@/components/stocks/message'
-import { Chat } from '../types'
+import { Chat, Message } from '@/lib/types'
 import { auth } from '@/auth'
-import { FlightStatus } from '@/components/flights/flight-status'
-import { SelectSeats } from '@/components/flights/select-seats'
-import { ListFlights } from '@/components/flights/list-flights'
-import { BoardingPass } from '@/components/flights/boarding-pass'
-import { PurchaseTickets } from '@/components/flights/purchase-ticket'
-import { CheckIcon, SpinnerIcon } from '@/components/ui/icons'
-import { format } from 'date-fns'
-import { streamText } from 'ai'
-import { google } from '@ai-sdk/google'
-import { GoogleGenerativeAI } from '@google/generative-ai'
-import { z } from 'zod'
-import { ListHotels } from '@/components/hotels/list-hotels'
-import { Destinations } from '@/components/flights/destinations'
-import { Video } from '@/components/media/video'
-import { rateLimit } from './ratelimit'
 
-const genAI = new GoogleGenerativeAI(
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-)
-
-async function describeImage(imageBase64: string) {
+async function confirmPurchase(symbol: string, price: number, amount: number) {
   'use server'
 
-  await rateLimit()
+  const aiState = getMutableAIState<typeof AI>()
 
-  const aiState = getMutableAIState()
-  const spinnerStream = createStreamableUI(null)
-  const messageStream = createStreamableUI(null)
-  const uiStream = createStreamableUI()
-
-  uiStream.update(
-    <BotCard>
-      <Video isLoading />
-    </BotCard>
+  const purchasing = createStreamableUI(
+    <div className="inline-flex items-start gap-1 md:items-center">
+      {spinner}
+      <p className="mb-2">
+        Purchasing {amount} ${symbol}...
+      </p>
+    </div>
   )
-  ;(async () => {
-    try {
-      let text = ''
 
-      // attachment as video for demo purposes,
-      // add your implementation here to support
-      // video as input for prompts.
-      if (imageBase64 === '') {
-        await new Promise(resolve => setTimeout(resolve, 5000))
+  const systemMessage = createStreamableUI(null)
 
-        text = `
-      The books in this image are:
+  runAsyncFnWithoutBlocking(async () => {
+    await sleep(1000)
 
-      1. The Little Prince by Antoine de Saint-Exupéry
-      2. The Prophet by Kahlil Gibran
-      3. Man's Search for Meaning by Viktor Frankl
-      4. The Alchemist by Paulo Coelho
-      5. The Kite Runner by Khaled Hosseini
-      6. To Kill a Mockingbird by Harper Lee
-      7. The Catcher in the Rye by J.D. Salinger
-      8. The Great Gatsby by F. Scott Fitzgerald
-      9. 1984 by George Orwell
-      10. Animal Farm by George Orwell
-      `
-      } else {
-        const imageData = imageBase64.split(',')[1]
+    purchasing.update(
+      <div className="inline-flex items-start gap-1 md:items-center">
+        {spinner}
+        <p className="mb-2">
+          Purchasing {amount} ${symbol}... working on it...
+        </p>
+      </div>
+    )
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-pro-vision' })
-        const prompt = 'List the books in this image.'
-        const image = {
-          inlineData: {
-            data: imageData,
-            mimeType: 'image/png'
-          }
+    await sleep(1000)
+
+    purchasing.done(
+      <div>
+        <p className="mb-2">
+          You have successfully purchased {amount} ${symbol}. Total cost:{' '}
+          {formatNumber(amount * price)}
+        </p>
+      </div>
+    )
+
+    systemMessage.done(
+      <SystemMessage>
+        You have purchased {amount} shares of {symbol} at ${price}. Total cost ={' '}
+        {formatNumber(amount * price)}.
+      </SystemMessage>
+    )
+
+    aiState.done({
+      ...aiState.get(),
+      messages: [
+        ...aiState.get().messages,
+        {
+          id: nanoid(),
+          role: 'system',
+          content: `[User has purchased ${amount} shares of ${symbol} at ${price}. Total cost = ${
+            amount * price
+          }]`
         }
-
-        const result = await model.generateContent([prompt, image])
-        text = result.response.text()
-        console.log(text)
-      }
-
-      spinnerStream.done(null)
-      messageStream.done(null)
-
-      uiStream.done(
-        <BotCard>
-          <Video />
-        </BotCard>
-      )
-
-      aiState.done({
-        ...aiState.get(),
-        interactions: [text]
-      })
-    } catch (e) {
-      console.error(e)
-
-      const error = new Error(
-        'The AI got rate limited, please try again later.'
-      )
-      uiStream.error(error)
-      spinnerStream.error(error)
-      messageStream.error(error)
-      aiState.done()
-    }
-  })()
+      ]
+    })
+  })
 
   return {
-    id: nanoid(),
-    attachments: uiStream.value,
-    spinner: spinnerStream.value,
-    display: messageStream.value
+    purchasingUI: purchasing.value,
+    newMessage: {
+      id: nanoid(),
+      display: systemMessage.value
+    }
   }
 }
 
 async function submitUserMessage(content: string) {
   'use server'
 
-  await rateLimit()
-
-  const aiState = getMutableAIState()
+  const aiState = getMutableAIState<typeof AI>()
 
   aiState.update({
     ...aiState.get(),
@@ -143,473 +118,396 @@ async function submitUserMessage(content: string) {
       {
         id: nanoid(),
         role: 'user',
-        content: `${aiState.get().interactions.join('\n\n')}\n\n${content}`
+        content
       }
     ]
   })
 
-  const history = aiState.get().messages.map(message => ({
-    role: message.role,
-    content: message.content
-  }))
-  // console.log(history)
+  let textStream: undefined | ReturnType<typeof createStreamableValue<string>>
+  let textNode: undefined | React.ReactNode
 
-  const textStream = createStreamableValue('')
-  const spinnerStream = createStreamableUI(<SpinnerMessage />)
-  const messageStream = createStreamableUI(null)
-  const uiStream = createStreamableUI()
+  const result = await streamUI({
+    model: openai('gpt-3.5-turbo'),
+    initial: <SpinnerMessage />,
+    system: `\
+    You are a stock trading conversation bot and you can help users buy stocks, step by step.
+    You and the user can discuss stock prices and the user can adjust the amount of stocks they want to buy, or place an order, in the UI.
+    
+    Messages inside [] means that it's a UI element or a user event. For example:
+    - "[Price of AAPL = 100]" means that an interface of the stock price of AAPL is shown to the user.
+    - "[User has changed the amount of AAPL to 10]" means that the user has changed the amount of AAPL to 10 in the UI.
+    
+    If the user requests purchasing a stock, call \`show_stock_purchase_ui\` to show the purchase UI.
+    If the user just wants the price, call \`show_stock_price\` to show the price.
+    If you want to show trending stocks, call \`list_stocks\`.
+    If you want to show events, call \`get_events\`.
+    If the user wants to sell stock, or complete another impossible task, respond that you are a demo and cannot do that.
+    
+    Besides that, you can also chat with users and do some calculations if needed.`,
+    messages: [
+      ...aiState.get().messages.map((message: any) => ({
+        role: message.role,
+        content: message.content,
+        name: message.name
+      }))
+    ],
+    text: ({ content, done, delta }) => {
+      if (!textStream) {
+        textStream = createStreamableValue('')
+        textNode = <BotMessage content={textStream.value} />
+      }
 
-  ;(async () => {
-    try {
-      const result = await streamText({
-        model: google('models/gemini-1.5-flash'),
-        temperature: 0,
-        tools: {
-          showFlights: {
-            description:
-              "List available flights in the UI. List 3 that match user's query.",
-            parameters: z.object({
-              departingCity: z.string(),
-              arrivalCity: z.string(),
-              departingAirport: z.string().describe('Departing airport code'),
-              arrivalAirport: z.string().describe('Arrival airport code'),
-              date: z
-                .string()
-                .describe(
-                  "Date of the user's flight, example format: 6 April, 1998"
-                )
+      if (done) {
+        textStream.done()
+        aiState.done({
+          ...aiState.get(),
+          messages: [
+            ...aiState.get().messages,
+            {
+              id: nanoid(),
+              role: 'assistant',
+              content
+            }
+          ]
+        })
+      } else {
+        textStream.update(delta)
+      }
+
+      return textNode
+    },
+    tools: {
+      listStocks: {
+        description: 'List three imaginary stocks that are trending.',
+        parameters: z.object({
+          stocks: z.array(
+            z.object({
+              symbol: z.string().describe('The symbol of the stock'),
+              price: z.number().describe('The price of the stock'),
+              delta: z.number().describe('The change in price of the stock')
             })
-          },
-          listDestinations: {
-            description: 'List destinations to travel cities, max 5.',
-            parameters: z.object({
-              destinations: z.array(
-                z
-                  .string()
-                  .describe(
-                    'List of destination cities. Include rome as one of the cities.'
-                  )
-              )
-            })
-          },
-          showSeatPicker: {
-            description:
-              'Show the UI to choose or change seat for the selected flight.',
-            parameters: z.object({
-              departingCity: z.string(),
-              arrivalCity: z.string(),
-              flightCode: z.string(),
-              date: z.string()
-            })
-          },
-          showHotels: {
-            description: 'Show the UI to choose a hotel for the trip.',
-            parameters: z.object({ city: z.string() })
-          },
-          checkoutBooking: {
-            description:
-              'Show the UI to purchase/checkout a flight and hotel booking.',
-            parameters: z.object({ shouldConfirm: z.boolean() })
-          },
-          showBoardingPass: {
-            description: "Show user's imaginary boarding pass.",
-            parameters: z.object({
-              airline: z.string(),
-              arrival: z.string(),
-              departure: z.string(),
-              departureTime: z.string(),
-              arrivalTime: z.string(),
-              price: z.number(),
-              seat: z.string(),
-              date: z
-                .string()
-                .describe('Date of the flight, example format: 6 April, 1998'),
-              gate: z.string()
-            })
-          },
-          showFlightStatus: {
-            description:
-              'Get the current status of imaginary flight by flight number and date.',
-            parameters: z.object({
-              flightCode: z.string(),
-              date: z.string(),
-              departingCity: z.string(),
-              departingAirport: z.string(),
-              departingAirportCode: z.string(),
-              departingTime: z.string(),
-              arrivalCity: z.string(),
-              arrivalAirport: z.string(),
-              arrivalAirportCode: z.string(),
-              arrivalTime: z.string()
-            })
-          }
-        },
-        system: `\
-      You are a friendly assistant that helps the user with booking flights to destinations that are based on a list of books. You can you give travel recommendations based on the books, and will continue to help the user book a flight to their destination.
-  
-      The date today is ${format(new Date(), 'd LLLL, yyyy')}. 
-      The user's current location is San Francisco, CA, so the departure city will be San Francisco and airport will be San Francisco International Airport (SFO). The user would like to book the flight out on May 12, 2024.
+          )
+        }),
+        generate: async function* ({ stocks }) {
+          yield (
+            <BotCard>
+              <StocksSkeleton />
+            </BotCard>
+          )
 
-      List United Airlines flights only.
-      
-      Here's the flow: 
-        1. List holiday destinations based on a collection of books.
-        2. List flights to destination.
-        3. Choose a flight.
-        4. Choose a seat.
-        5. Choose hotel
-        6. Purchase booking.
-        7. Show boarding pass.
-      `,
-        messages: [...history]
-      })
+          await sleep(1000)
 
-      let textContent = ''
-      spinnerStream.done(null)
+          const toolCallId = nanoid()
 
-      for await (const delta of result.fullStream) {
-        const { type } = delta
-
-        if (type === 'text-delta') {
-          const { textDelta } = delta
-
-          textContent += textDelta
-          messageStream.update(<BotMessage content={textContent} />)
-
-          aiState.update({
+          aiState.done({
             ...aiState.get(),
             messages: [
               ...aiState.get().messages,
               {
                 id: nanoid(),
                 role: 'assistant',
-                content: textContent
+                content: [
+                  {
+                    type: 'tool-call',
+                    toolName: 'listStocks',
+                    toolCallId,
+                    args: { stocks }
+                  }
+                ]
+              },
+              {
+                id: nanoid(),
+                role: 'tool',
+                content: [
+                  {
+                    type: 'tool-result',
+                    toolName: 'listStocks',
+                    toolCallId,
+                    result: stocks
+                  }
+                ]
               }
             ]
           })
-        } else if (type === 'tool-call') {
-          const { toolName, args } = delta
 
-          if (toolName === 'listDestinations') {
-            const { destinations } = args
+          return (
+            <BotCard>
+              <Stocks props={stocks} />
+            </BotCard>
+          )
+        }
+      },
+      showStockPrice: {
+        description:
+          'Get the current stock price of a given stock or currency. Use this to show the price to the user.',
+        parameters: z.object({
+          symbol: z
+            .string()
+            .describe(
+              'The name or symbol of the stock or currency. e.g. DOGE/AAPL/USD.'
+            ),
+          price: z.number().describe('The price of the stock.'),
+          delta: z.number().describe('The change in price of the stock')
+        }),
+        generate: async function* ({ symbol, price, delta }) {
+          yield (
+            <BotCard>
+              <StockSkeleton />
+            </BotCard>
+          )
 
-            uiStream.update(
-              <BotCard>
-                <Destinations destinations={destinations} />
-              </BotCard>
-            )
+          await sleep(1000)
 
-            aiState.done({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content: `Here's a list of holiday destinations based on the books you've read. Choose one to proceed to booking a flight. \n\n ${args.destinations.join(', ')}.`,
-                  display: {
-                    name: 'listDestinations',
-                    props: {
-                      destinations
-                    }
+          const toolCallId = nanoid()
+
+          aiState.done({
+            ...aiState.get(),
+            messages: [
+              ...aiState.get().messages,
+              {
+                id: nanoid(),
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'tool-call',
+                    toolName: 'showStockPrice',
+                    toolCallId,
+                    args: { symbol, price, delta }
                   }
-                }
-              ]
-            })
-          } else if (toolName === 'showFlights') {
-            aiState.done({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content:
-                    "Here's a list of flights for you. Choose one and we can proceed to pick a seat.",
-                  display: {
-                    name: 'showFlights',
-                    props: {
-                      summary: args
-                    }
+                ]
+              },
+              {
+                id: nanoid(),
+                role: 'tool',
+                content: [
+                  {
+                    type: 'tool-result',
+                    toolName: 'showStockPrice',
+                    toolCallId,
+                    result: { symbol, price, delta }
                   }
-                }
-              ]
-            })
-
-            uiStream.update(
-              <BotCard>
-                <ListFlights summary={args} />
-              </BotCard>
-            )
-          } else if (toolName === 'showSeatPicker') {
-            aiState.done({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content:
-                    "Here's a list of available seats for you to choose from. Select one to proceed to payment.",
-                  display: {
-                    name: 'showSeatPicker',
-                    props: {
-                      summary: args
-                    }
-                  }
-                }
-              ]
-            })
-
-            uiStream.update(
-              <BotCard>
-                <SelectSeats summary={args} />
-              </BotCard>
-            )
-          } else if (toolName === 'showHotels') {
-            aiState.done({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content:
-                    "Here's a list of hotels for you to choose from. Select one to proceed to payment.",
-                  display: {
-                    name: 'showHotels',
-                    props: {}
-                  }
-                }
-              ]
-            })
-
-            uiStream.update(
-              <BotCard>
-                <ListHotels />
-              </BotCard>
-            )
-          } else if (toolName === 'checkoutBooking') {
-            aiState.done({
-              ...aiState.get(),
-              interactions: []
-            })
-
-            uiStream.update(
-              <BotCard>
-                <PurchaseTickets />
-              </BotCard>
-            )
-          } else if (toolName === 'showBoardingPass') {
-            aiState.done({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content:
-                    "Here's your boarding pass. Please have it ready for your flight.",
-                  display: {
-                    name: 'showBoardingPass',
-                    props: {
-                      summary: args
-                    }
-                  }
-                }
-              ]
-            })
-
-            uiStream.update(
-              <BotCard>
-                <BoardingPass summary={args} />
-              </BotCard>
-            )
-          } else if (toolName === 'showFlightStatus') {
-            aiState.update({
-              ...aiState.get(),
-              interactions: [],
-              messages: [
-                ...aiState.get().messages,
-                {
-                  id: nanoid(),
-                  role: 'assistant',
-                  content: `The flight status of ${args.flightCode} is as follows:
-                Departing: ${args.departingCity} at ${args.departingTime} from ${args.departingAirport} (${args.departingAirportCode})
-                `
-                }
-              ],
-              display: {
-                name: 'showFlights',
-                props: {
-                  summary: args
-                }
+                ]
               }
+            ]
+          })
+
+          return (
+            <BotCard>
+              <Stock props={{ symbol, price, delta }} />
+            </BotCard>
+          )
+        }
+      },
+      showStockPurchase: {
+        description:
+          'Show price and the UI to purchase a stock or currency. Use this if the user wants to purchase a stock or currency.',
+        parameters: z.object({
+          symbol: z
+            .string()
+            .describe(
+              'The name or symbol of the stock or currency. e.g. DOGE/AAPL/USD.'
+            ),
+          price: z.number().describe('The price of the stock.'),
+          numberOfShares: z
+            .number()
+            .optional()
+            .describe(
+              'The **number of shares** for a stock or currency to purchase. Can be optional if the user did not specify it.'
+            )
+        }),
+        generate: async function* ({ symbol, price, numberOfShares = 100 }) {
+          const toolCallId = nanoid()
+
+          if (numberOfShares <= 0 || numberOfShares > 1000) {
+            aiState.done({
+              ...aiState.get(),
+              messages: [
+                ...aiState.get().messages,
+                {
+                  id: nanoid(),
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'tool-call',
+                      toolName: 'showStockPurchase',
+                      toolCallId,
+                      args: { symbol, price, numberOfShares }
+                    }
+                  ]
+                },
+                {
+                  id: nanoid(),
+                  role: 'tool',
+                  content: [
+                    {
+                      type: 'tool-result',
+                      toolName: 'showStockPurchase',
+                      toolCallId,
+                      result: {
+                        symbol,
+                        price,
+                        numberOfShares,
+                        status: 'expired'
+                      }
+                    }
+                  ]
+                },
+                {
+                  id: nanoid(),
+                  role: 'system',
+                  content: `[User has selected an invalid amount]`
+                }
+              ]
             })
 
-            uiStream.update(
+            return <BotMessage content={'Invalid amount'} />
+          } else {
+            aiState.done({
+              ...aiState.get(),
+              messages: [
+                ...aiState.get().messages,
+                {
+                  id: nanoid(),
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'tool-call',
+                      toolName: 'showStockPurchase',
+                      toolCallId,
+                      args: { symbol, price, numberOfShares }
+                    }
+                  ]
+                },
+                {
+                  id: nanoid(),
+                  role: 'tool',
+                  content: [
+                    {
+                      type: 'tool-result',
+                      toolName: 'showStockPurchase',
+                      toolCallId,
+                      result: {
+                        symbol,
+                        price,
+                        numberOfShares
+                      }
+                    }
+                  ]
+                }
+              ]
+            })
+
+            return (
               <BotCard>
-                <FlightStatus summary={args} />
+                <Purchase
+                  props={{
+                    numberOfShares,
+                    symbol,
+                    price: +price,
+                    status: 'requires_action'
+                  }}
+                />
               </BotCard>
             )
           }
         }
+      },
+      getEvents: {
+        description:
+          'List funny imaginary events between user highlighted dates that describe stock activity.',
+        parameters: z.object({
+          events: z.array(
+            z.object({
+              date: z
+                .string()
+                .describe('The date of the event, in ISO-8601 format'),
+              headline: z.string().describe('The headline of the event'),
+              description: z.string().describe('The description of the event')
+            })
+          )
+        }),
+        generate: async function* ({ events }) {
+          yield (
+            <BotCard>
+              <EventsSkeleton />
+            </BotCard>
+          )
+
+          await sleep(1000)
+
+          const toolCallId = nanoid()
+
+          aiState.done({
+            ...aiState.get(),
+            messages: [
+              ...aiState.get().messages,
+              {
+                id: nanoid(),
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'tool-call',
+                    toolName: 'getEvents',
+                    toolCallId,
+                    args: { events }
+                  }
+                ]
+              },
+              {
+                id: nanoid(),
+                role: 'tool',
+                content: [
+                  {
+                    type: 'tool-result',
+                    toolName: 'getEvents',
+                    toolCallId,
+                    result: events
+                  }
+                ]
+              }
+            ]
+          })
+
+          return (
+            <BotCard>
+              <Events props={events} />
+            </BotCard>
+          )
+        }
       }
-
-      uiStream.done()
-      textStream.done()
-      messageStream.done()
-    } catch (e) {
-      console.error(e)
-
-      const error = new Error(
-        'The AI got rate limited, please try again later.'
-      )
-      uiStream.error(error)
-      textStream.error(error)
-      messageStream.error(error)
-      aiState.done()
     }
-  })()
+  })
 
   return {
     id: nanoid(),
-    attachments: uiStream.value,
-    spinner: spinnerStream.value,
-    display: messageStream.value
-  }
-}
-
-export async function requestCode() {
-  'use server'
-
-  const aiState = getMutableAIState()
-
-  aiState.done({
-    ...aiState.get(),
-    messages: [
-      ...aiState.get().messages,
-      {
-        role: 'assistant',
-        content:
-          "A code has been sent to user's phone. They should enter it in the user interface to continue."
-      }
-    ]
-  })
-
-  const ui = createStreamableUI(
-    <div className="animate-spin">
-      <SpinnerIcon />
-    </div>
-  )
-
-  ;(async () => {
-    await sleep(2000)
-    ui.done()
-  })()
-
-  return {
-    status: 'requires_code',
-    display: ui.value
-  }
-}
-
-export async function validateCode() {
-  'use server'
-
-  const aiState = getMutableAIState()
-
-  const status = createStreamableValue('in_progress')
-  const ui = createStreamableUI(
-    <div className="flex flex-col items-center justify-center gap-3 p-6 text-zinc-500">
-      <div className="animate-spin">
-        <SpinnerIcon />
-      </div>
-      <div className="text-sm text-zinc-500">
-        Please wait while we fulfill your order.
-      </div>
-    </div>
-  )
-
-  ;(async () => {
-    await sleep(2000)
-
-    ui.done(
-      <div className="flex flex-col items-center text-center justify-center gap-3 p-4 text-emerald-700">
-        <CheckIcon />
-        <div>Payment Succeeded</div>
-        <div className="text-sm text-zinc-600">
-          Thanks for your purchase! You will receive an email confirmation
-          shortly.
-        </div>
-      </div>
-    )
-
-    aiState.done({
-      ...aiState.get(),
-      messages: [
-        ...aiState.get().messages.slice(0, -1),
-        {
-          role: 'assistant',
-          content: 'The purchase has completed successfully.'
-        }
-      ]
-    })
-
-    status.done('completed')
-  })()
-
-  return {
-    status: status.value,
-    display: ui.value
-  }
-}
-
-export type Message = {
-  role: 'user' | 'assistant' | 'system' | 'function' | 'data' | 'tool'
-  content: string
-  id?: string
-  name?: string
-  display?: {
-    name: string
-    props: Record<string, any>
+    display: result.value
   }
 }
 
 export type AIState = {
   chatId: string
-  interactions?: string[]
   messages: Message[]
 }
 
 export type UIState = {
   id: string
   display: React.ReactNode
-  spinner?: React.ReactNode
-  attachments?: React.ReactNode
 }[]
 
 export const AI = createAI<AIState, UIState>({
   actions: {
     submitUserMessage,
-    requestCode,
-    validateCode,
-    describeImage
+    confirmPurchase
   },
   initialUIState: [],
-  initialAIState: { chatId: nanoid(), interactions: [], messages: [] },
-  unstable_onGetUIState: async () => {
+  initialAIState: { chatId: nanoid(), messages: [] },
+  onGetUIState: async () => {
     'use server'
 
     const session = await auth()
 
     if (session && session.user) {
-      const aiState = getAIState()
+      const aiState = getAIState() as Chat
 
       if (aiState) {
         const uiState = getUIStateFromAIState(aiState)
@@ -619,7 +517,7 @@ export const AI = createAI<AIState, UIState>({
       return
     }
   },
-  unstable_onSetAIState: async ({ state }) => {
+  onSetAIState: async ({ state }) => {
     'use server'
 
     const session = await auth()
@@ -630,7 +528,9 @@ export const AI = createAI<AIState, UIState>({
       const createdAt = new Date()
       const userId = session.user.id as string
       const path = `/chat/${chatId}`
-      const title = messages[0].content.substring(0, 100)
+
+      const firstMessageContent = messages[0].content as string
+      const title = firstMessageContent.substring(0, 100)
 
       const chat: Chat = {
         id: chatId,
@@ -654,38 +554,36 @@ export const getUIStateFromAIState = (aiState: Chat) => {
     .map((message, index) => ({
       id: `${aiState.chatId}-${index}`,
       display:
-        message.role === 'assistant' ? (
-          message.display?.name === 'showFlights' ? (
-            <BotCard>
-              <ListFlights summary={message.display.props.summary} />
-            </BotCard>
-          ) : message.display?.name === 'showSeatPicker' ? (
-            <BotCard>
-              <SelectSeats summary={message.display.props.summary} />
-            </BotCard>
-          ) : message.display?.name === 'showHotels' ? (
-            <BotCard>
-              <ListHotels />
-            </BotCard>
-          ) : message.content === 'The purchase has completed successfully.' ? (
-            <BotCard>
-              <PurchaseTickets status="expired" />
-            </BotCard>
-          ) : message.display?.name === 'showBoardingPass' ? (
-            <BotCard>
-              <BoardingPass summary={message.display.props.summary} />
-            </BotCard>
-          ) : message.display?.name === 'listDestinations' ? (
-            <BotCard>
-              <Destinations destinations={message.display.props.destinations} />
-            </BotCard>
-          ) : (
-            <BotMessage content={message.content} />
-          )
+        message.role === 'tool' ? (
+          message.content.map(tool => {
+            return tool.toolName === 'listStocks' ? (
+              <BotCard>
+                {/* TODO: Infer types based on the tool result*/}
+                {/* @ts-expect-error */}
+                <Stocks props={tool.result} />
+              </BotCard>
+            ) : tool.toolName === 'showStockPrice' ? (
+              <BotCard>
+                {/* @ts-expect-error */}
+                <Stock props={tool.result} />
+              </BotCard>
+            ) : tool.toolName === 'showStockPurchase' ? (
+              <BotCard>
+                {/* @ts-expect-error */}
+                <Purchase props={tool.result} />
+              </BotCard>
+            ) : tool.toolName === 'getEvents' ? (
+              <BotCard>
+                {/* @ts-expect-error */}
+                <Events props={tool.result} />
+              </BotCard>
+            ) : null
+          })
         ) : message.role === 'user' ? (
-          <UserMessage showAvatar>{message.content}</UserMessage>
-        ) : (
+          <UserMessage>{message.content as string}</UserMessage>
+        ) : message.role === 'assistant' &&
+          typeof message.content === 'string' ? (
           <BotMessage content={message.content} />
-        )
+        ) : null
     }))
 }
